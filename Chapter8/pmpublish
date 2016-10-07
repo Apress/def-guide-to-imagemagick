@@ -1,0 +1,277 @@
+#!/usr/bin/perl
+
+# This script takes a directory name on the command line and uses the META 
+# files in that directory to publish nice HTML
+
+use strict;
+use File::Copy;
+use File::Copy::Recursive;
+use Image::Magick;
+use Image::EXIF;
+use PhotoMagick;
+
+#######################
+# Configuration options
+
+# The output configuration
+my($outdirectory) = "/data/stillhq.com/html";
+my($indexdirectory) = "/home/mikal/blog";
+my($subdirectory) = "pictures";
+my($baseurl) = "http://www.stillhq.com/";
+
+# The name of the main index file
+my($indexfilename) = "000001.blog";
+my($indexfileitems) = 20;
+
+# Configuration for template files
+my($templatepath) = "/data/pictures/photomagick";
+my($imageindextemplate) = "$templatepath/image.html";
+my($indextemplate) = "$templatepath/index.blog";
+my($thumbnailtemplate) = "$templatepath/thumbnails.html";
+
+# Configuration options for the image annotation
+my($logofont) = "$templatepath/schmotto.ttf";
+my($logosize) = 60;
+my($logocolor) = "white";
+my($logotext) = "stillhq.com";
+my($logogravity) = "SouthWest";
+
+#######################
+# Variables
+
+my($meta, $filename, $image, $rc);
+my($target,$targetpath, $targetindexpath, $targeturl);
+my($keywords, $temp, $template);
+my(%imagecount, %imagethumbnails, %allimagethumbnails);
+my($INDEX);
+
+# We need to have the final directory name for the output path
+my($dir) = $ARGV[0];
+$dir =~ s/^.*\/([^\/])/$1/;
+print "Processing $dir...\n";
+
+# Read in the META file
+$meta = PhotoMagick::readmeta($ARGV[0]);
+
+# Load in the image template file
+$template = readfile("$imageindextemplate");
+
+# Make STDOUT unbuffered
+{
+    my $ofh = select STDOUT;
+    $| = 1;
+    select $ofh;
+}
+
+# Process the images
+foreach $filename(sort(keys(%$meta))){
+    $target = $meta->{$filename}->target;
+    
+    # Work out where this images is going, and ensure that directory exists
+    $targetpath = "$outdirectory/$target/$subdirectory/$dir";
+    $targetindexpath = "$indexdirectory/$target/$subdirectory/$dir";
+    $targeturl = "$baseurl$target/$subdirectory/$dir";
+    
+    # If this is a new target for this directory name, then we need to create
+    # the start of the index file in that directory
+    if($target ne "none"){
+	File::Copy::Recursive::pathmk($targetpath);
+	File::Copy::Recursive::pathmk($targetindexpath);
+	print "\t$filename: [target is $target] ";
+	  
+	# Turn spaces in the keywords into underscores
+	$keywords = $meta->{$filename}->keywords;
+	$keywords =~ s/ /_/g;
+	chomp($keywords);
+	
+	# Open the image
+	$image = new Image::Magick();
+	$rc = $image->Read("$ARGV[0]/$filename");
+	die "$rc" if $rc;
+	
+	# If the image needs to be rotated, then now is the time to do it
+	if($meta->{$filename}->rotate eq "right"){
+	    print "[rotating right] ";
+	    $rc = $image->Rotate('90');
+	    die "$rc" if $rc;
+	}
+	elsif($meta->{$filename}->rotate eq "left"){
+	    print "[rotating left] ";
+	    $rc = $image->Rotate('-90');
+	    die "$rc" if $rc;
+	}
+	
+	# Resize the image: large sized is currently 1280x960
+	if($meta->{$filename}->rotate eq "no"){
+	    $rc = $image->Sample(geometry=>'1280x960');
+	}
+	else{
+	    $rc = $image->Sample(geometry=>'960x1280');
+	}
+	die "$rc" if $rc;
+
+	# Place a logo on the bottom of the large image
+	$rc = $image->Annotate(font=>$logofont, 
+			       pointsize=>$logosize, 
+			       fill=>$logocolor, 
+			       text=>$logotext,
+			       gravity=>$logogravity);
+	die "$rc" if $rc;
+
+	# Write out the large size
+	$rc = $image->Write("$targetpath$keywords-$filename");
+	die "$rc" if $rc;
+	print "large ";
+	
+	# Medium sized
+	if($meta->{$filename}->rotate eq "no"){
+	    $rc = $image->Sample(geometry=>'x480');
+	}
+	else{
+	    $rc = $image->Sample(geometry=>'x640');
+	}
+	die "$rc" if $rc;
+	$rc = $image->Write("$targetpath$keywords-medium-$filename");
+	die "$rc" if $rc;
+	print "medium ";
+	
+	# Small sized. Vertically aligned images will come out smaller so
+	# that they all line up on the thumbnails page
+	$rc = $image->Sample(geometry=>'x96');
+	die "$rc" if $rc;
+	$rc = $image->Write("$targetpath$keywords-small-$filename");
+	die "$rc" if $rc;
+	print "small ";
+	
+	# The thumbnail in the index file for this image
+	if($imagecount{$target} eq ""){
+	    $imagecount{$target} = 1;
+	}
+
+	# Only some appear on the CMS index page
+	if($imagecount{$target} < $indexfileitems + 1){
+	    $imagethumbnails{$target} = $imagethumbnails{$target}.
+		"<a href=\"$targeturl"."image".$imagecount{$target}.".html\">".
+		"<img src=\"$targeturl$keywords-small-$filename\"></a>&nbsp;\n\n";
+	}
+	elsif($imagecount{$target} == $indexfileitems + 1){
+	    $imagethumbnails{$target} = $imagethumbnails{$target}.
+		"<br/><br/><a href=\"$targeturl"."thumbnails.html\">".
+		"See more thumbnails</a>";
+	}
+
+	# All of them appear on the thumbnails page though
+	$allimagethumbnails{$target} = $allimagethumbnails{$target}.
+	    "<a href=\"$targeturl"."image".$imagecount{$target}.".html\">".
+	    "<img src=\"$targeturl$keywords-small-$filename\"></a>&nbsp;\n\n";
+	print "index ";
+	  
+	# The index file for this image
+	my($url) = "/$target/$subdirectory/$dir"."image".
+	   $imagecount{$target}.".html";
+	my($parenturl) = "/$target/$subdirectory/$dir";
+	my($largeimage) = "/$target/$subdirectory/$dir/$keywords-$filename";
+	my($mediumimage) = "/$target/$subdirectory/$dir/$keywords-medium-$filename";
+	my($smallimage) = "/$target/$subdirectory/$dir/$keywords-small-$filename";
+	my($thumbnailspage) = "/$target/$subdirectory/$dir"."thumbnails.html";
+
+	# TODO: Use exif tool here
+	my($exifreader, $data);
+	$exifreader = new Image::EXIF("$ARGV[0]/$filename") or 
+	    die "No EXIF read";
+	$data = $exifreader->get_all_info() or
+	    die "EXIF read failed";
+	undef($exifreader);
+
+	my($exif_model) = $data->{camera}->{'Camera Model'};
+	my($exif_datetime) = $data->{other}->{'Image Digitized'};
+	my($exif_exposuretime) = $data->{image}->{'Exposure Time'};
+	my($exif_fnumber) = $data->{image}->{'F-Number'};
+	my($exif_isospeed) = $data->{image}->{'ISO Speed Rating'};
+	my($exif_shutterspeed) = $data->{image}->{'Shutter Speed'};
+	my($exif_exposurebias) = $data->{image}->{'Exposure Bias'};
+	my($exif_aperture) = $data->{image}->{'Lens Aperture'};
+	my($exif_meteringmode) = $data->{image}->{'Metering Mode'};
+	my($exif_flash) = $data->{image}->{'Flash'};
+	my($exif_focallength) = $data->{image}->{'Focal Length]'};
+	
+	# Remove those pesky underscores from the keywords again
+	$keywords =~ s/_/ /g;
+
+	# Write out the image template
+	$temp = $template;
+	$temp =~ s/(\$\w+(?:::)?\w*)/"defined $1 ? $1 : ''"/gee;
+
+	open INDEX, "> $targetpath"."image".
+	    $imagecount{$target}.".html" or 
+	    die "Couldn't open image detail page";
+	print INDEX $temp;
+	close INDEX;
+	print "html ";
+
+	$imagecount{$target}++;
+    }
+    else{
+	print "\t$filename: [target is $target] ";
+    }
+
+    print "\n";
+}
+
+# Now output the index pages based on their template
+foreach $target (keys(%imagethumbnails)){
+    if($target ne "none"){
+	my($title, $description, $thumbnails);
+	
+	$targetpath = "$outdirectory/$target/$subdirectory/$dir";
+	$targetindexpath = "$indexdirectory/$target/$subdirectory/$dir";
+
+	$template = readfile("$indextemplate");
+	my($targetdesc) = PhotoMagick::readmetatarget("$ARGV[0]/META-$target");
+	$title = $targetdesc->{'title'};
+	$description = $targetdesc->{'description'};
+	$thumbnails = $imagethumbnails{$target};
+	
+	$template =~ s/(\$\w+(?:::)?\w*)/"defined $1 ? $1 : ''"/gee;
+	
+	open INDEX, "> $targetindexpath/$indexfilename" or 
+	    die "Could open index file";
+	print INDEX $template;
+	close INDEX;
+	print "CMS entry: $targetindexpath$indexfilename\n";
+	
+	# And the thumbnail page
+	$template = readfile("$thumbnailtemplate");
+	$thumbnails = $allimagethumbnails{$target};
+	my($url) = "/$target/$subdirectory/$dir"."thumbnails.html";
+	my($parenturl) = "/$target/$subdirectory/$dir";
+
+	
+	$template =~ s/(\$\w+(?:::)?\w*)/"defined $1 ? $1 : ''"/gee;
+	
+	open INDEX, "> $targetpath/thumbnails.html" or 
+	    die "Could open index file";
+	print INDEX $template;
+	close INDEX;
+	print "Thumbnails: $targetpath"."thumbnails.html\n";
+    }
+}
+
+print "Processing finished\n\n";
+
+# Read the named file into a string
+#
+# Takes the filename
+sub readfile{
+    my($filename) = @_;
+    my($INDEX, $retval);
+
+    $retval = "";
+    open INDEX, "< $filename" or die "Couldn't open $filename";
+    while(<INDEX>){
+	$retval = "$retval$_";
+    }
+    close INDEX;
+
+    return $retval;
+}

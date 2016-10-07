@@ -1,0 +1,166 @@
+#! /usr/bin/ruby -w
+
+#####################
+# resize 640 480
+# annotate schmotto.ttf 30 SouthWest stillhq.com white
+#####################
+
+# Load the RMagick ImageMagick wrapper
+require 'RMagick'
+include Magick
+
+# Convert a string to the right gravity enumeration entry
+def togravity(str)
+  case str
+  when "Forget"
+    return Magick::ForgetGravity
+  when "NorthWest"
+    return Magick::NorthWestGravity
+  when "North"
+    return Magick::NorthGravity
+  when "NorthEast"
+    return Magick::NorthEastGravity
+  when "West"
+    return Magick::WestGravity
+  when "Center"
+    return Magick::CenterGravity
+  when "East"
+    return Magick::EastGravity
+  when "SouthWest"
+    return Magick::SouthWestGravity
+  when "South"
+    return Magick::SouthGravity
+  when "SouthEast"
+    return Magick::SouthEastGravity
+  else
+    print "Unknown gravity\n"
+    return Magick::Center
+  end
+end
+
+# Execute a command, either from the user or from the stored
+# list of commands
+def execute(execmd, oldimg, displayafter)
+  cmdarray = execmd.split(" ")
+  img = oldimg.dup
+
+  # To implement new commands, put them here...
+  case cmdarray[0]
+  when "annotate"
+    text = Magick::Draw.new
+    text.font = cmdarray[1]
+    text.pointsize = cmdarray[2].to_i
+    text.gravity = togravity(cmdarray[3])
+
+    text.annotate(img, 0, 0, 0, 0, cmdarray[4]) {
+      self.fill = cmdarray[5]
+    }
+
+  when "normalize"
+    img = img.normalize
+
+  when "resize"
+    # The resize command destroys the aspect ratio of the image
+    # so we do this instead
+    img = img.change_geometry(cmdarray[1]){ |cols, rows, img|
+      print "\t\tActual size: ", cols, "x", rows, "\n"
+      img.resize(cols, rows)
+    }
+
+  when "spread"
+    img = img.spread(cmdarray[1].to_i)
+
+  else
+    print "Command unknown\n"
+    return img
+  end
+
+  if displayafter
+  then
+    img.display
+    img.write("/tmp/blah.jpg")
+  end
+  return img
+end
+
+print "Welcome to imwizard. The basic flow works like this:\n"
+print " - define an input filename\n\n"
+print " - define an input pattern for the final application\n"
+print " - try a command, the output is displayed\n"
+print " - if you like that command, type \"commit\"\n"
+print " - otherwise try another command\n\n"
+print "When you're finished, type done\n"
+print "Type help for help\n\n"
+
+print "input filename >> "
+input = gets.chomp
+print "Loading image...\n"
+img = ImageList.new(input)
+img.display
+print "Done\n\n"
+
+cmds = Array.new
+prevcmd = ""
+newimg = img
+
+while true
+  print ">> "
+  cmd = gets.chomp
+
+  case cmd
+  when "help"
+    print "\n"
+    print "You can enter a command here, commit a command, or end.\n"
+    print "The commit a command, type the word commit on a line by itself.\n"
+    print "To end, type done on a line by itself\n\n"
+    print "Valid commands are:\n\n"
+    print "\tannotate <fontname> <pointsize> <gravity> <text> <color>\n"
+    print "\tnormalize\n"
+    print "\tresize <geometry>\n"
+    print "\tspread <radius>\n"
+    print "\n\n"
+
+  when "done"
+    print "Now you need to tell me where to implement the changes.\n"
+    print "path >> "
+    path = gets.chomp
+    print "Now I need a regular expression which defines the images to change\n"
+    print "regexp >> "
+    re = gets.chomp
+
+    print "Processing...\n"
+    Dir.foreach(path) do |file|
+      regexp = Regexp.new(re)
+      match = regexp.match(file)
+      if match
+      then
+        print "Processing ", file, "\n"
+        img = ImageList.new(path + "/" + file)
+        cmds.each do |cmd|
+          img = execute(cmd, img, false)
+        end
+        img.write(path + "/" + file)
+      end
+    end
+    print "Bye\n"
+    exit
+
+  when "commit"
+    if prevcmd != ""
+    then
+      cmds.push(prevcmd)
+      img = newimg
+      prevcmd = ""
+      print cmds.join("\n"), "\n"
+    else
+      print "There is nothing to commit...\n"
+    end
+
+  else
+    prevcmd = cmd
+    newimg = execute(cmd, img, true)
+  end
+
+end
+
+exit
